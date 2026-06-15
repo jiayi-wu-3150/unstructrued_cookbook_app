@@ -1,0 +1,19 @@
+# This is a Databricks asset bundle definition for declarative_vectorization.
+# The Databricks extension requires databricks.yml configuration file.
+# See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
+
+bundle:
+  name: declarative_vectorization
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://fevm-serverless-stable-r4umw1.cloud.databricks.com
+
+  ## Optionally, there could be 'staging' or 'prod' targets here.
+  #
+  # prod:
+  #   workspace:
+  #     host: https://fevm-serverless-stable-r4umw1.cloud.databricks.com
