@@ -25,7 +25,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install torch torchvision transformers pillow mlflow databricks-sdk --quiet
+# MAGIC %pip install torch torchvision transformers pillow mlflow==3.12.0 databricks-sdk --quiet
 # MAGIC %restart_python
 
 # COMMAND ----------
@@ -119,7 +119,7 @@ mlflow.set_registry_uri("databricks-uc")
 # GPU pip requirements for the serving endpoint
 pip_requirements = [
     "--extra-index-url https://download.pytorch.org/whl/cu121",
-    "mlflow>=2.14.0",
+    "mlflow==3.12.0",
     "torch==2.3.1+cu121",
     "torchvision==0.18.1+cu121",
     "transformers==4.41.2",
@@ -170,7 +170,7 @@ print(f"Latest version: {latest_version}")
 
 import requests, time
 
-HOST  = dbutils.notebook.entry_point.getDbutils().notebook().getContext().browserHostName().get()
+HOST  = spark.conf.get("spark.databricks.workspaceUrl")
 TOKEN = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
 BASE_URL = f"https://{HOST}/api/2.0/serving-endpoints"
@@ -218,7 +218,7 @@ print("Note: GPU endpoints typically take 10–20 minutes to reach READY state."
 
 import requests
 
-HOST  = dbutils.notebook.entry_point.getDbutils().notebook().getContext().browserHostName().get()
+HOST  = spark.conf.get("spark.databricks.workspaceUrl")
 TOKEN = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
 
@@ -250,6 +250,38 @@ else:
 
 # MAGIC %sql
 # MAGIC DESCRIBE MODEL serverless_stable_r4umw1_catalog.unstructured_data.clip_vit_large_patch14
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 9 — Use the endpoint via `ai_query()` (SQL)
+# MAGIC
+# MAGIC Once the endpoint is READY, embed a table of base64 images directly in SQL.
+# MAGIC
+# MAGIC **Input column type**: `STRING` (base64-encoded image). The `named_struct` is
+# MAGIC passed directly to the custom pyfunc endpoint — no binary conversion needed.
+# MAGIC If your column is `BINARY`, wrap it with `base64(col)` first.
+# MAGIC
+# MAGIC **Note**: This pattern uses the *custom endpoint* path of `ai_query`, NOT the
+# MAGIC built-in multimodal path (which requires `BINARY` for the `files` param and
+# MAGIC `unbase64()` for base64 strings).
+# MAGIC
+# MAGIC **Return type**: `ARRAY<STRUCT<model_input: ARRAY<DOUBLE>>>` — one element per
+# MAGIC input row; `.model_input` is the 768-dim embedding.
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC -- Example: embed keyframes stored as base64 strings in a Delta table
+# MAGIC -- Replace catalog.schema.my_frames_table with your actual table
+# MAGIC SELECT
+# MAGIC   frame_id,
+# MAGIC   ai_query(
+# MAGIC     'clip_embedding_endpoint',
+# MAGIC     request     => named_struct('model_input', model_input),
+# MAGIC     returnType  => 'ARRAY<STRUCT<model_input: ARRAY<DOUBLE>>>'
+# MAGIC   )[0].model_input AS image_embedding
+# MAGIC FROM catalog.schema.my_frames_table
 
 # COMMAND ----------
 
