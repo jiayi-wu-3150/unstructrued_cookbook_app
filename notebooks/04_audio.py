@@ -251,9 +251,10 @@ print(textwrap.fill(row["full_text"] or "(no transcript)", width=90))
 print()
 
 # Load original audio from the volume and play it inline
-local_path = row["file_path"].replace("dbfs:", "/dbfs")  # serverless: path is already /Volumes/...
-if row["file_path"].startswith("/Volumes/"):
-    local_path = row["file_path"]
+# On serverless: strip "dbfs:" prefix → /Volumes/...  (not /dbfs/Volumes/...)
+local_path = row["file_path"]
+if local_path.startswith("dbfs:"):
+    local_path = local_path[len("dbfs:"):]
 ipy_display(Audio(filename=local_path))
 
 # COMMAND ----------
