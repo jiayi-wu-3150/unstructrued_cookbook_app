@@ -303,63 +303,7 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 8 — Text-to-video search (query time)
-# MAGIC
-# MAGIC Encodes a text query with the CLIP text encoder locally (CPU), then searches
-# MAGIC the Vector Search index with cosine similarity.
-# MAGIC
-# MAGIC Because CLIP image and text embeddings share the same 768-dim space, the
-# MAGIC search is **cross-modal** — the query `"person cooking breakfast"` will surface
-# MAGIC frames of people cooking even if those frames have no text labels.
-# MAGIC
-# MAGIC **Note**: wait for the VS index to reach ONLINE state before running this cell.
-
-# COMMAND ----------
-
-# MAGIC %pip install transformers torch --quiet
-
-# COMMAND ----------
-
-from transformers import CLIPProcessor, CLIPModel
-import torch
-
-_clip_model     = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
-_clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
-_clip_model.eval()
-
-def get_text_embedding(text: str) -> list:
-    """Encode a text query into the 768-dim CLIP embedding space."""
-    inputs = _clip_processor(text=text, return_tensors="pt", padding=True)
-    with torch.no_grad():
-        features = _clip_model.get_text_features(**inputs)
-    return features.squeeze().tolist()
-
-# COMMAND ----------
-
-QUERY = "person eating breakfast at a table"   # change to any text query
-TOP_K = 5
-
-query_vector = get_text_embedding(QUERY)
-print(f"Query: '{QUERY}'  |  Embedding dim: {len(query_vector)}")
-
-index = vs.get_index(VS_ENDPOINT, VS_INDEX)
-results = index.similarity_search(
-    query_vector=query_vector,
-    columns=["frame_id", "video_id", "frame_num", "frame_description"],
-    num_results=TOP_K,
-)
-
-print(f"\nTop {TOP_K} frames for query: '{QUERY}'\n" + "-" * 60)
-for row in results["result"]["data_array"]:
-    frame_id, video_id, frame_num, desc, score = row
-    print(f"  frame_num={frame_num:5d}  score={score:.4f}  video={video_id}")
-    print(f"    {desc[:120]}")
-    print()
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 9 — Aggregate descriptions per video (optional summary)
+# MAGIC ## Step 8 — Aggregate descriptions per video (optional summary)
 # MAGIC
 # MAGIC Concatenates all frame descriptions for a video and uses an LLM to generate
 # MAGIC a single summary. Useful for building a video-level search layer on top of
@@ -394,7 +338,7 @@ for row in results["result"]["data_array"]:
 # MAGIC | Visual embedding | CLIP (`clip_embedding_endpoint`) | 768-dim, same space for image + text |
 # MAGIC | Frame description | Gemini 2.5 Flash multimodal | `ai_query` with `files => array(unbase64(...))` |
 # MAGIC | Vector index | Databricks Vector Search | Delta Sync, pre-computed embeddings, 768-dim |
-# MAGIC | Query-time encoding | CLIP text encoder (local) | `model.get_text_features(**inputs)` |
+# MAGIC | Query-time encoding | CLIP text encoder (local) | `model.get_text_features(**inputs)` — see `model_setup/clip_model.py` note |
 # MAGIC | Search | Cross-modal cosine similarity | Text query → CLIP embedding → VS similarity search |
 # MAGIC
 # MAGIC ## Design decisions
