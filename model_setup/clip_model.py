@@ -9,7 +9,7 @@
 # MAGIC **Input**: base64-encoded image string (one row per image)
 # MAGIC **Output**: 768-dimensional image embedding (ARRAY<DOUBLE>)
 # MAGIC
-# MAGIC The endpoint is used by notebook `07_video.py` to embed video keyframes for
+# MAGIC The endpoint is used by notebook `06_video.py` to embed video keyframes for
 # MAGIC visual similarity search.
 # MAGIC
 # MAGIC **Reference**: Databricks HuggingFace model registration pattern
@@ -244,17 +244,7 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 8 — Inspect the registered model in UC
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC DESCRIBE MODEL serverless_stable_r4umw1_catalog.unstructured_data.clip_vit_large_patch14
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 9 — Use the endpoint via `ai_query()` (SQL)
+# MAGIC ## Step 8 — Use the endpoint via `ai_query()` (SQL)
 # MAGIC
 # MAGIC Once the endpoint is READY, embed a table of base64 images directly in SQL.
 # MAGIC
