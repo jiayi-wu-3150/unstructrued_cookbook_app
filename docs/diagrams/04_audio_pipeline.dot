@@ -1,0 +1,59 @@
+digraph AudioPipeline {
+    rankdir=TB;
+    graph [fontname="Helvetica", splines=ortho, nodesep=0.6, ranksep=0.7];
+    node [fontname="Helvetica", fontsize=12, style="filled,rounded", shape=box];
+    edge [fontname="Helvetica", fontsize=10, color="#333333", penwidth=1.5];
+
+    // ── Input ──
+    volume [label="UC Volume\nvoice_celebrities\n(WAV files)", fillcolor="#FFE6CC", shape=cylinder, style=filled];
+
+    // ── Ingest ──
+    ingest [label="spark.read\nbinaryFile", fillcolor="#DAE8FC"];
+
+    // ── Compress ──
+    compress [label="Downsample to\n16 kHz mono WAV\n(~15 MB → ~2 MB)", fillcolor="#DAE8FC"];
+
+    // ── Transcribe ──
+    model_serving [label="Databricks\nModel Serving\nwhisper_large_v3", fillcolor="#E1D5E7", shape=box, style="filled,rounded"];
+    ai_query [label="ai_query()\nspark.sql()", fillcolor="#DAE8FC"];
+
+    // ── Raw table ──
+    raw_table [label="voice_celebrities_raw\n(file_path, speaker,\nfull_text, transcribed_at)", fillcolor="#FFF2CC", shape=cylinder, style=filled];
+
+    // ── Non-speech branch ──
+    nonspeech_check [label="Non-speech\ndetection\nLENGTH(full_text) < 20", fillcolor="#F8CECC", style="filled,rounded"];
+
+    subgraph cluster_nonspeech {
+        label="notebook 05_audio_nonspeech";
+        style=dashed;
+        color="#999999";
+        fontsize=11;
+        gemini [label="Gemini 2.5 Flash\nmultimodal\nclassify + describe", fillcolor="#E1D5E7", style="filled,rounded"];
+        sound_chunks [label="sound_chunks\n(chunk_text =\naudio description)", fillcolor="#FFF2CC", shape=cylinder, style=filled];
+        gemini -> sound_chunks [label="1 chunk / clip"];
+    }
+
+    // ── Chunking ──
+    chunk_udf [label="Word-window UDF\n~150 words, 20 overlap\nreturns ArrayType", fillcolor="#DAE8FC"];
+    explode [label="explode()\n1 row per chunk", fillcolor="#DAE8FC"];
+
+    // ── Output table ──
+    chunks_table [label="voice_celebrities_chunks\n(chunk_id, speaker,\nchunk_text, word_start,\nword_end)", fillcolor="#FFF2CC", shape=cylinder, style=filled];
+
+    // ── Vector Search ──
+    vs [label="Vector Search\nIndex\n(ready for RAG)", fillcolor="#D5E8D4", shape=box, style="filled,rounded"];
+
+    // ── Edges ──
+    volume -> ingest [label="binary content"];
+    ingest -> compress [label="collect() to driver"];
+    compress -> ai_query [label="createDataFrame\ncompressed bytes"];
+    ai_query -> model_serving [label="HTTP request\nper file", style=dashed];
+    model_serving -> ai_query [label="transcript text", style=dashed];
+    ai_query -> raw_table [label="saveAsTable"];
+    raw_table -> nonspeech_check;
+    nonspeech_check -> gemini [label="short transcript\n(non-speech)", color="#CC0000"];
+    nonspeech_check -> chunk_udf [label="speech clips\nfilter >= 20 chars"];
+    chunk_udf -> explode;
+    explode -> chunks_table [label="saveAsTable"];
+    chunks_table -> vs [label="embed chunk_text"];
+}
