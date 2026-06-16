@@ -222,3 +222,48 @@ print(f"Saved {chunks_df.count()} chunks to {OUT_TABLE}")
 # MAGIC FROM serverless_stable_r4umw1_catalog.unstructured_data.voice_celebrities_chunks
 # MAGIC GROUP BY speaker
 # MAGIC ORDER BY total_words DESC
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 6 — Listen and compare: audio playback vs transcript
+# MAGIC
+# MAGIC Pick one speaker, play the original WAV, and display the transcript side by side.
+# MAGIC Change `SPEAKER` to any name from `voice_celebrities_raw`.
+
+# COMMAND ----------
+
+from IPython.display import Audio, display as ipy_display
+import textwrap
+
+SPEAKER = None  # set to e.g. "Morgan Freeman", or None to pick the first available
+
+row = spark.table(RAW_TABLE).filter(
+    F.col("speaker") == SPEAKER if SPEAKER else F.lit(True)
+).limit(1).collect()[0]
+
+print(f"Speaker : {row['speaker']}")
+print(f"File    : {row['file_path'].split('/')[-1]}")
+print(f"Words   : {len((row['full_text'] or '').split())}")
+print()
+print("── Transcript ──────────────────────────────────────────────────────────────")
+print(textwrap.fill(row["full_text"] or "(no transcript)", width=90))
+print()
+
+# Load original audio from the volume and play it inline
+local_path = row["file_path"].replace("dbfs:", "/dbfs")  # serverless: path is already /Volumes/...
+if row["file_path"].startswith("/Volumes/"):
+    local_path = row["file_path"]
+ipy_display(Audio(filename=local_path))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### All chunks for the selected speaker
+
+# COMMAND ----------
+
+spark.table(OUT_TABLE).filter(F.col("speaker") == row["speaker"]) \
+    .orderBy("chunk_index") \
+    .select("chunk_index", "word_start", "word_end", "chunk_text") \
+    .show(truncate=100)
