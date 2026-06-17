@@ -4,3 +4,5 @@
 .vscode
 .claude
 Untitled
+__pycache__/
+*.pyc

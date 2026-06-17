@@ -1,0 +1,34 @@
+command:
+  - streamlit
+  - run
+  - app.py
+  - --server.port=8080
+  - --server.address=0.0.0.0
+  - --server.headless=true
+  - --browser.gatherUsageStats=false
+
+resources:
+  - name: sql-warehouse
+    sql_warehouse:
+      id: b04eb16e0536bd88
+      permission: CAN_USE
+
+  - name: whisper-endpoint
+    serving_endpoint:
+      name: whisper_large_v3
+      permission: CAN_QUERY
+
+  - name: clip-endpoint
+    serving_endpoint:
+      name: clip_embedding_endpoint
+      permission: CAN_QUERY
+
+  - name: gemini-endpoint
+    serving_endpoint:
+      name: databricks-gemini-2-5-flash
+      permission: CAN_QUERY
+
+  - name: video-search-endpoint
+    serving_endpoint:
+      name: video-search-endpoint
+      permission: CAN_QUERY
