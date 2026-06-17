@@ -7,13 +7,18 @@ SCHEMA  = "unstructured_data"
 WAREHOUSE_ID = os.environ.get("WAREHOUSE_ID", "b04eb16e0536bd88")
 
 
+def _hostname() -> str:
+    """Return bare hostname (strips https:// if present — Databricks Apps injects the full URL)."""
+    host = os.environ.get("DATABRICKS_HOST", "fevm-serverless-stable-r4umw1.cloud.databricks.com")
+    return host.removeprefix("https://").removeprefix("http://").rstrip("/")
+
+
 @st.cache_resource
 def get_connection():
     from databricks import sql as dbsql
-    host = os.environ.get("DATABRICKS_HOST", "fevm-serverless-stable-r4umw1.cloud.databricks.com")
     token = os.environ.get("DATABRICKS_TOKEN")
     return dbsql.connect(
-        server_hostname=host,
+        server_hostname=_hostname(),
         http_path=f"/sql/1.0/warehouses/{WAREHOUSE_ID}",
         access_token=token,
     )
@@ -38,12 +43,11 @@ def get_workspace_client():
 @st.cache_data(ttl=3600, show_spinner=False)
 def download_volume_file(path: str) -> bytes:
     """Download a file from a UC Volume path via Databricks Files API."""
-    import urllib.request, os
-    host = os.environ.get("DATABRICKS_HOST", "fevm-serverless-stable-r4umw1.cloud.databricks.com")
+    import urllib.request
     token = os.environ.get("DATABRICKS_TOKEN", "")
     # Use the Files API: GET /api/2.0/fs/files/{path}
     # path starts with /Volumes/... so strip the leading slash
-    url = f"https://{host}/api/2.0/fs/files/{path.lstrip('/')}"
+    url = f"https://{_hostname()}/api/2.0/fs/files/{path.lstrip('/')}"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     with urllib.request.urlopen(req) as resp:
         return resp.read()
