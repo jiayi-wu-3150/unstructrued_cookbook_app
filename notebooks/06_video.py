@@ -28,7 +28,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install opencv-python pillow databricks-vectorsearch --quiet
+# MAGIC %pip install opencv-python-headless pillow "databricks-vectorsearch==0.63" "numpy<2.0" --quiet
 # MAGIC %restart_python
 
 # COMMAND ----------
@@ -38,6 +38,8 @@ CATALOG       = "serverless_stable_r4umw1_catalog"
 SCHEMA        = "unstructured_data"
 VOLUME        = "video_clips_sample"
 VOLUME_PATH   = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}"
+
+FRAMES_VOLUME_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/video_frames"
 
 CLIPS_TABLE   = f"{CATALOG}.{SCHEMA}.video_clips"
 EMBED_TABLE   = f"{CATALOG}.{SCHEMA}.video_clips_embeddings"
@@ -77,26 +79,29 @@ VS_INDEX       = f"{CATALOG}.{SCHEMA}.video_clips_index"
 import os
 import cv2
 import base64
-import numpy as np
-from pyspark.sql import functions as F
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+from pyspark.sql import functions as F, Window
+from pyspark.sql.types import StringType
 
-def _extract_frames(video_path: str, frame_interval: int) -> list:
-    """Return list of (video_id, frame_num, base64_jpeg) for every Nth frame."""
+spark.sql(f"CREATE VOLUME IF NOT EXISTS {CATALOG}.{SCHEMA}.video_frames")
+os.makedirs(FRAMES_VOLUME_PATH, exist_ok=True)
+
+def _extract_frames(video_path: str, frame_interval: int) -> int:
+    """Save every Nth frame as JPEG to FRAMES_VOLUME_PATH/{video_id}/. Returns saved count."""
     cap = cv2.VideoCapture(video_path)
     video_id = os.path.basename(video_path).rsplit(".", 1)[0]
-    rows, count = [], 0
+    frame_dir = os.path.join(FRAMES_VOLUME_PATH, video_id)
+    os.makedirs(frame_dir, exist_ok=True)
+    count, saved = 0, 0
     while True:
         ret, frame = cap.read()
         if not ret:
             break
         if count % frame_interval == 0:
-            _, buf = cv2.imencode(".jpg", frame)
-            b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
-            rows.append((video_id, count, b64))
+            cv2.imwrite(os.path.join(frame_dir, f"frame_{count:06d}.jpg"), frame)
+            saved += 1
         count += 1
     cap.release()
-    return rows
+    return saved
 
 # COMMAND ----------
 
@@ -108,19 +113,27 @@ if not spark.catalog.tableExists(CLIPS_TABLE):
     ]
     print(f"Found {len(mp4_files)} video file(s): {[os.path.basename(f) for f in mp4_files]}")
 
-    all_frames = []
     for path in mp4_files:
-        frames = _extract_frames(path, FRAME_INTERVAL)
-        print(f"  {os.path.basename(path)}: {len(frames)} frames extracted")
-        all_frames.extend(frames)
+        n = _extract_frames(path, FRAME_INTERVAL)
+        print(f"  {os.path.basename(path)}: {n} frames saved to {FRAMES_VOLUME_PATH}")
 
-    schema = StructType([
-        StructField("video_id",    StringType()),
-        StructField("frame_num",   IntegerType()),
-        StructField("model_input", StringType()),  # base64 JPEG
-    ])
-    clips_df = spark.createDataFrame(all_frames, schema=schema) \
-        .withColumn("frame_id", F.concat(F.col("video_id"), F.lit("::"), F.col("frame_num").cast("string")))
+    # Load saved JPEGs via binaryFile — recursive so we pick up {video_id}/ subdirs
+    b64_udf = F.udf(lambda b: base64.b64encode(b).decode("utf-8"), StringType())
+    window_spec = Window.orderBy(F.monotonically_increasing_id())
+
+    clips_df = (
+        spark.read.format("binaryFile")
+            .option("pathGlobFilter", "*.jpg")
+            .option("recursiveFileLookup", "true")
+            .load(FRAMES_VOLUME_PATH)
+        .withColumn("clip_id",    F.row_number().over(window_spec))
+        .withColumn("video_id",   F.regexp_extract(F.col("path"), r"/([^/]+)/frame_\d+\.jpg$", 1))
+        .withColumn("frame_num",  F.regexp_extract(F.col("path"), r"frame_(\d+)\.jpg$", 1).cast("int"))
+        .withColumn("frame_path", F.col("path"))
+        .withColumn("model_input", b64_udf(F.col("content")))
+        .withColumn("frame_id",   F.concat(F.col("video_id"), F.lit("::"), F.col("frame_num").cast("string")))
+        .drop("content", "length", "modificationTime")
+    )
 
     clips_df.write.format("delta").saveAsTable(CLIPS_TABLE)
     print(f"\nSaved {clips_df.count()} frames to {CLIPS_TABLE}")
@@ -128,7 +141,7 @@ else:
     print(f"{CLIPS_TABLE} already exists — skipping extraction.")
     clips_df = spark.table(CLIPS_TABLE)
 
-clips_df.select("frame_id", "video_id", "frame_num").show(5)
+clips_df.select("frame_id", "video_id", "frame_num", "frame_path").show(5)
 
 # COMMAND ----------
 
@@ -192,7 +205,7 @@ if not spark.catalog.tableExists(DESC_TABLE):
                 'Describe this video frame in 2-3 sentences for search indexing. '
                 'Include: main subjects, actions, setting, and notable objects. '
                 'Be specific and factual.',
-                files => array(unbase64(model_input))
+                files => unbase64(model_input)
             ) AS frame_description
         FROM {CLIPS_TABLE}
     """)
@@ -221,9 +234,11 @@ spark.sql(f"""
         e.video_id,
         e.frame_num,
         e.image_embeddings,
-        d.frame_description
+        d.frame_description,
+        c.frame_path
     FROM {EMBED_TABLE} e
     JOIN {DESC_TABLE} d USING (frame_id)
+    JOIN {CLIPS_TABLE} c USING (frame_id)
 """)
 
 spark.sql(f"ALTER TABLE {GOLD_TABLE} SET TBLPROPERTIES (delta.enableChangeDataFeed = true)")
@@ -272,7 +287,7 @@ if VS_INDEX not in existing_indexes:
         primary_key="frame_id",
         embedding_dimension=768,
         embedding_vector_column="image_embeddings",
-        columns_to_sync=["video_id", "frame_num", "frame_description"],
+        columns_to_sync=["video_id", "frame_num", "frame_description", "frame_path"],
     )
     print(f"Index '{VS_INDEX}' created — initial sync in progress.")
 else:
@@ -283,7 +298,7 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 7 — Smoke test: inspect sample embeddings
+# MAGIC ## Step 7 — Smoke test: inspect sample embeddings and run a search
 
 # COMMAND ----------
 
@@ -299,6 +314,57 @@ else:
 # MAGIC FROM serverless_stable_r4umw1_catalog.unstructured_data.video_clips_gold
 # MAGIC ORDER BY frame_num
 # MAGIC LIMIT 10
+
+# COMMAND ----------
+
+# MAGIC %pip install transformers==4.41.2 torch==2.3.1 "numpy<2.0" --quiet
+# MAGIC %restart_python
+
+# COMMAND ----------
+
+# Cross-modal search: encode a text query with CLIP text encoder, search against frame embeddings
+import time
+from transformers import CLIPProcessor, CLIPModel
+from databricks.vector_search.client import VectorSearchClient
+from databricks.vector_search.reranker import DatabricksReranker
+
+VS_ENDPOINT = "video-search-endpoint"
+VS_INDEX    = "serverless_stable_r4umw1_catalog.unstructured_data.video_clips_index"
+
+# Wait for VS index to be ONLINE before querying
+vs = VectorSearchClient(disable_notice=True)
+for _ in range(40):
+    status = vs.get_index(VS_ENDPOINT, VS_INDEX).describe().get("status", {})
+    ready = status.get("ready", False)
+    detail = status.get("detailed_state", "UNKNOWN")
+    print(f"Index status: {detail} | ready={ready}")
+    if ready:
+        break
+    time.sleep(30)
+else:
+    raise RuntimeError("VS index did not become ONLINE within 20 minutes — re-run this cell once it syncs.")
+
+def get_text_embedding(text: str) -> list:
+    model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
+    processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+    inputs = processor(text=text, return_tensors="pt", padding=True)
+    features = model.get_text_features(**inputs)
+    return features.detach().numpy().tolist()[0]
+
+query_text = "person running outdoors"  # change to match your video content
+query_vector = get_text_embedding(query_text)
+
+index = VectorSearchClient(disable_notice=True).get_index(VS_ENDPOINT, VS_INDEX)
+results = index.similarity_search(
+    query_text=query_text,
+    query_vector=query_vector,
+    columns=["frame_id", "video_id", "frame_num", "frame_description", "frame_path"],
+    query_type="HYBRID",
+    num_results=5,
+    reranker=DatabricksReranker(columns_to_rerank=["frame_description"]),
+)
+for row in results["result"]["data_array"]:
+    print(row)
 
 # COMMAND ----------
 
@@ -336,7 +402,7 @@ else:
 # MAGIC |-------|-----------|---------|
 # MAGIC | Frame extraction | OpenCV (`cv2`) | Every 30th frame, driver-side, base64 JPEG |
 # MAGIC | Visual embedding | CLIP (`clip_embedding_endpoint`) | 768-dim, same space for image + text |
-# MAGIC | Frame description | Gemini 2.5 Flash multimodal | `ai_query` with `files => array(unbase64(...))` |
+# MAGIC | Frame description | Gemini 2.5 Flash multimodal | `ai_query` with `files => unbase64(model_input)` |
 # MAGIC | Vector index | Databricks Vector Search | Delta Sync, pre-computed embeddings, 768-dim |
 # MAGIC | Query-time encoding | CLIP text encoder (local) | `model.get_text_features(**inputs)` — see `model_setup/clip_model.py` note |
 # MAGIC | Search | Cross-modal cosine similarity | Text query → CLIP embedding → VS similarity search |
@@ -364,5 +430,5 @@ else:
 # MAGIC **Why Gemini for descriptions instead of `ai_parse_document`?**
 # MAGIC `ai_parse_document` supports images (JPG/PNG) and produces element-level
 # MAGIC descriptions, but requires saving frames as files to a volume first. Gemini
-# MAGIC multimodal via `ai_query` accepts inline BINARY, making the pipeline fully
-# MAGIC table-driven with no intermediate file writes.
+# MAGIC multimodal via `ai_query` with `files => unbase64(model_input)` accepts inline
+# MAGIC BINARY, making the pipeline fully table-driven with no intermediate file writes.
