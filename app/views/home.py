@@ -49,7 +49,7 @@ RECIPES = [
 
 
 def render():
-    st.title("🗂️ Declarative Vectorization")
+    st.title("🗂️ Unstructured Cookbook")
     st.markdown(
         "A recipe book for ingesting **any file type** into Databricks for RAG and semantic search. "
         "One self-contained pipeline per file type — all producing the same output schema."

@@ -2,7 +2,7 @@ import importlib
 import streamlit as st
 
 st.set_page_config(
-    page_title="Declarative Vectorization",
+    page_title="Unstructured Cookbook",
     page_icon="🗂️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -19,7 +19,7 @@ RECIPES = {
 }
 
 with st.sidebar:
-    st.markdown("## 🗂️ Declarative Vectorization")
+    st.markdown("## 🗂️ Unstructured Cookbook")
     st.caption("Any file type → Databricks Vector Search")
     st.divider()
 
