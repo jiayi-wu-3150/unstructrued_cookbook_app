@@ -1,0 +1,75 @@
+digraph VideoPipeline {
+    rankdir=TB;
+    graph [fontname="Helvetica", splines=ortho, nodesep=0.7, ranksep=0.8];
+    node [fontname="Helvetica", fontsize=12, style="filled,rounded", shape=box];
+    edge [fontname="Helvetica", fontsize=10, color="#333333", penwidth=1.5];
+
+    // ── Input ──
+    mp4_volume [label="UC Volume\nvideo_clips_sample\n(MP4 / AVI / MOV)", fillcolor="#FFE6CC", shape=cylinder, style=filled];
+
+    // ── Frame extraction ──
+    opencv [label="OpenCV cv2\ndriver-side extraction\nevery 30th frame", fillcolor="#DAE8FC"];
+    frames_volume [label="UC Volume\nvideo_frames\n{video_id}/frame_XXXXXX.jpg", fillcolor="#FFE6CC", shape=cylinder, style=filled];
+
+    // ── Spark ingest ──
+    binaryfile [label="spark.read\nbinaryFile\nrecursiveFileLookup=true\n+ base64 UDF", fillcolor="#DAE8FC"];
+
+    // ── video_clips ──
+    clips_table [label="video_clips\n(frame_id, video_id, frame_num\nframe_path, model_input)", fillcolor="#FFF2CC", shape=cylinder, style=filled];
+
+    // ── CLIP embedding ──
+    clip_endpoint [label="Model Serving\nclip_embedding_endpoint\nopenai/clip-vit-large-patch14\nGPU_SMALL", fillcolor="#E1D5E7", style="filled,rounded"];
+    clip_query [label="ai_query()\nnamed_struct('model_input', ...)\nreturnType ARRAY<STRUCT<...>>", fillcolor="#DAE8FC"];
+
+    // ── Gemini description ──
+    gemini_endpoint [label="FMAPI\ndatabricks-gemini-2-5-flash\nmultimodal", fillcolor="#E1D5E7", style="filled,rounded"];
+    gemini_query [label="ai_query()\nfiles => unbase64(model_input)\n2-3 sentence description", fillcolor="#DAE8FC"];
+
+    // ── Intermediate tables ──
+    embed_table [label="video_clips_embeddings\n(frame_id, video_id\nimage_embeddings: ARRAY<DOUBLE>)", fillcolor="#FFF2CC", shape=cylinder, style=filled];
+    desc_table [label="video_descriptions_raw\n(frame_id, video_id\nframe_description: STRING)", fillcolor="#FFF2CC", shape=cylinder, style=filled];
+
+    // ── Gold table ──
+    gold_table [label="video_clips_gold\n(frame_id, image_embeddings\nframe_description, frame_path)\nCDF enabled", fillcolor="#FFF2CC", shape=cylinder, style=filled];
+
+    // ── Vector Search ──
+    vs_index [label="Vector Search Index\nvideo_clips_index\n768-dim · HYBRID\nDelta Sync · TRIGGERED", fillcolor="#D5E8D4", style="filled,rounded"];
+
+    // ── Query time ──
+    subgraph cluster_querytime {
+        label="Query time";
+        style=dashed;
+        color="#999999";
+        fontsize=11;
+        text_query [label="Text query\n\"person running outdoors\"", fillcolor="#FFE6CC", style="filled,rounded"];
+        clip_text [label="CLIP text encoder\nget_text_features()\n768-dim vector", fillcolor="#DAE8FC"];
+        search [label="similarity_search()\nquery_type=HYBRID\n+ DatabricksReranker", fillcolor="#DAE8FC"];
+        results [label="Top-K frames\nframe_path · description · score", fillcolor="#D5E8D4", style="filled,rounded"];
+        text_query -> clip_text;
+        clip_text -> search;
+        search -> results;
+    }
+
+    // ── Edges ──
+    mp4_volume -> opencv [label="os.listdir\n+ cv2.VideoCapture"];
+    opencv -> frames_volume [label="cv2.imwrite\nJPEG per frame"];
+    frames_volume -> binaryfile [label="path + content\n(BINARY)"];
+    binaryfile -> clips_table [label="saveAsTable"];
+
+    clips_table -> clip_query [label="model_input\n(base64 STRING)"];
+    clip_query -> clip_endpoint [label="HTTP\nper frame", style=dashed];
+    clip_endpoint -> clip_query [label="768-dim\nembedding", style=dashed];
+    clip_query -> embed_table [label="CREATE TABLE AS"];
+
+    clips_table -> gemini_query [label="unbase64(model_input)\n(BINARY)"];
+    gemini_query -> gemini_endpoint [label="HTTP\nper frame", style=dashed];
+    gemini_endpoint -> gemini_query [label="description\ntext", style=dashed];
+    gemini_query -> desc_table [label="CREATE TABLE AS"];
+
+    embed_table -> gold_table [label="JOIN\nframe_id"];
+    desc_table -> gold_table [label="JOIN\nframe_id"];
+
+    gold_table -> vs_index [label="Delta Sync\npipeline_type=TRIGGERED"];
+
+    vs_index -> search [label="ANN + BM25\ncosine similarity", style=dashed];
+}

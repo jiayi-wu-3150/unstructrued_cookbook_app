@@ -8,40 +8,9 @@ labels required — because CLIP image and text embeddings share the same 768-di
 
 ## Architecture
 
-> Diagram source: [diagrams/06_video_architecture.mmd](diagrams/06_video_architecture.mmd)
+![Pipeline diagram](diagrams/06_video_architecture.png)
 
-```mermaid
-%%{init: {"flowchart": {"htmlLabels": true}} }%%
-flowchart TD
-    A["MP4 files\n/Volumes/.../video_clips_sample"] -->|"OpenCV cv2\nevery 30th frame"| B
-
-    subgraph "UC Volume: video_frames"
-        B["JPEGs\nvideo_id/frame_XXXXXX.jpg"]
-    end
-
-    B -->|"spark.read.format('binaryFile')\nrecursiveFileLookup=true\n+ base64 UDF"| C
-
-    subgraph "Delta Tables"
-        C["video_clips\nframe_id · video_id · frame_num\nframe_path · model_input (base64)"]
-        C -->|"ai_query(clip_embedding_endpoint)\nrequest => named_struct('model_input', ...)\n768-dim ARRAY<DOUBLE>"| D
-        C -->|"ai_query(databricks-gemini-2-5-flash)\nfiles => unbase64(model_input)\n2-3 sentence description"| E
-        D["video_clips_embeddings\nframe_id · image_embeddings"]
-        E["video_descriptions_raw\nframe_id · frame_description"]
-        D -->|JOIN on frame_id| F
-        E -->|JOIN on frame_id| F
-        F["video_clips_gold\nframe_id · image_embeddings\nframe_description · frame_path\n(CDF enabled)"]
-    end
-
-    F -->|"Delta Sync\npipeline_type=TRIGGERED\nprimary_key=frame_id"| G
-
-    subgraph "Vector Search"
-        G["video_clips_index\n768-dim · HYBRID\nSTORAGE_OPTIMIZED endpoint"]
-    end
-
-    H["Text query\n'person running outdoors'"] -->|"CLIP text encoder\nget_text_features()"| I["768-dim query vector"]
-    I -->|"similarity_search\nquery_type=HYBRID\n+ DatabricksReranker"| G
-    G --> J["Top-K frames\nframe_path · description · score"]
-```
+> Diagram source: [diagrams/06_video_architecture.dot](diagrams/06_video_architecture.dot)
 
 ---
 
