@@ -1,5 +1,6 @@
+import base64
 import streamlit as st
-from utils.db import query, CATALOG, SCHEMA, get_workspace_client
+from utils.db import query, download_volume_file, CATALOG, SCHEMA, get_workspace_client
 from utils.formatting import recipe_header, code_tab_content, requirements_tab_content, show_endpoint_health
 
 GOLD_TABLE  = f"{CATALOG}.{SCHEMA}.video_clips_gold"
@@ -116,18 +117,37 @@ def render():
 
         st.divider()
 
-        # Gold table preview
-        st.subheader("Gold table — `video_clips_gold`")
-        with st.spinner("Loading..."):
-            gold_df = query(f"""
-                SELECT frame_id, video_id, frame_num,
-                       SIZE(image_embeddings) AS embedding_dim,
-                       LEFT(frame_description, 120) AS description_preview
-                FROM {GOLD_TABLE}
-                ORDER BY frame_num
-                LIMIT 10
-            """)
-        st.dataframe(gold_df, use_container_width=True, hide_index=True)
+        col_vid, col_table = st.columns([1, 1], gap="large")
+
+        with col_vid:
+            st.markdown("**Original video**")
+            with st.spinner("Loading video..."):
+                try:
+                    video_bytes = download_volume_file(
+                        f"/Volumes/{CATALOG}/{SCHEMA}/video_clips_sample/Breakfas1939_512kb.mp4"
+                    )
+                    b64 = base64.b64encode(video_bytes).decode()
+                    st.markdown(
+                        f'<video controls width="100%" style="border-radius:4px">'
+                        f'<source src="data:video/mp4;base64,{b64}" type="video/mp4">'
+                        f'</video>',
+                        unsafe_allow_html=True,
+                    )
+                except Exception as e:
+                    st.warning(f"Could not load video: {e}")
+
+        with col_table:
+            st.markdown("**Gold table — `video_clips_gold`**")
+            with st.spinner("Loading..."):
+                gold_df = query(f"""
+                    SELECT frame_num,
+                           SIZE(image_embeddings) AS embedding_dim,
+                           LEFT(frame_description, 100) AS description_preview
+                    FROM {GOLD_TABLE}
+                    ORDER BY frame_num
+                    LIMIT 10
+                """)
+            st.dataframe(gold_df, use_container_width=True, hide_index=True, height=300)
 
         st.divider()
 
@@ -146,11 +166,16 @@ def render():
                     return
 
             if results:
-                st.success(f"**{len(results)} results** — CLIP hybrid search + reranker")
-                for r in results:
-                    with st.expander(f"Frame {r.get('frame_num', '?')}  ·  `{r.get('frame_id', '')}`"):
-                        st.markdown(r.get("frame_description") or "_No description_")
-                        st.caption(f"Path: `{r.get('frame_path', '')}`")
+                st.success(f"**{len(results)} results**")
+                cols = st.columns(min(len(results), 3))
+                for i, r in enumerate(results):
+                    with cols[i % 3]:
+                        try:
+                            img_bytes = download_volume_file(r.get("frame_path", ""))
+                            st.image(img_bytes, use_container_width=True)
+                        except Exception:
+                            st.caption("_(image unavailable)_")
+                        st.caption(f"Frame {r.get('frame_num', '?')} · {r.get('frame_description', '')[:80]}...")
             else:
                 st.info("No matching frames found. Try a different query.")
 

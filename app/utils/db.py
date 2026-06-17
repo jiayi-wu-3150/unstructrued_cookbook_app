@@ -45,8 +45,8 @@ def download_volume_file(path: str) -> bytes:
     """Download a file from a UC Volume path via Databricks Files API."""
     import urllib.request
     token = os.environ.get("DATABRICKS_TOKEN", "")
-    # Use the Files API: GET /api/2.0/fs/files/{path}
-    # path starts with /Volumes/... so strip the leading slash
+    # Normalize path: strip dbfs: prefix, then leading slash
+    path = path.removeprefix("dbfs:").removeprefix("file:")
     url = f"https://{_hostname()}/api/2.0/fs/files/{path.lstrip('/')}"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     with urllib.request.urlopen(req) as resp:
