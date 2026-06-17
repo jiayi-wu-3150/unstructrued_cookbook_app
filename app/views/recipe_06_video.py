@@ -82,40 +82,20 @@ results = index.similarity_search(
 )"""
 
 
-@st.cache_resource
-def _get_clip_model():
-    from transformers import CLIPProcessor, CLIPModel
-    model     = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
-    processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
-    model.eval()
-    return model, processor
-
-
-def _get_text_embedding(text: str) -> list:
-    import torch
-    model, processor = _get_clip_model()
-    inputs = processor(text=text, return_tensors="pt", padding=True)
-    with torch.no_grad():
-        features = model.get_text_features(**inputs)
-    return features.detach().numpy().tolist()[0]
-
-
-def _vs_search(query_text: str, query_vector: list, n: int = 5) -> list[dict]:
-    from databricks.vector_search.client import VectorSearchClient
-    from databricks.vector_search.reranker import DatabricksReranker
-    vs = VectorSearchClient(disable_notice=True)
-    index = vs.get_index(VS_ENDPOINT, VS_INDEX)
-    results = index.similarity_search(
-        query_text=query_text,
-        query_vector=query_vector,
-        columns=["frame_id", "video_id", "frame_num", "frame_description", "frame_path"],
-        query_type="HYBRID",
-        num_results=n,
-        reranker=DatabricksReranker(columns_to_rerank=["frame_description"]),
-    )
-    rows = results.get("result", {}).get("data_array", [])
-    cols = ["frame_id", "video_id", "frame_num", "frame_description", "frame_path"]
-    return [dict(zip(cols, row)) for row in rows]
+def _vs_search(query_text: str, n: int = 5) -> list[dict]:
+    """Text search on frame_description using SQL LIKE matching."""
+    keywords = [w for w in query_text.lower().split() if len(w) > 3]
+    if not keywords:
+        keywords = query_text.lower().split()
+    conditions = " OR ".join(f"LOWER(frame_description) LIKE '%{kw}%'" for kw in keywords)
+    df = query(f"""
+        SELECT frame_id, video_id, frame_num, frame_description, frame_path
+        FROM {GOLD_TABLE}
+        WHERE {conditions}
+        ORDER BY frame_num
+        LIMIT {n}
+    """)
+    return df.to_dict("records")
 
 
 def render():
@@ -153,26 +133,16 @@ def render():
 
         # Hybrid VS search
         st.subheader("Hybrid search (CLIP vector + BM25 + reranker)")
-        st.caption(
-            "Text query → CLIP text encoder (768-dim) → Vector Search HYBRID mode "
-            "(cosine similarity + BM25 on `frame_description`) → DatabricksReranker"
-        )
+        st.caption("Keyword search on `frame_description` — production pipeline uses CLIP vector + HYBRID VS search")
 
         selected_query = st.selectbox("Demo query", DEMO_QUERIES, label_visibility="collapsed")
 
         if st.button("🔍 Search frames", type="primary"):
-            with st.spinner("Encoding query with CLIP text encoder..."):
+            with st.spinner("Searching frames..."):
                 try:
-                    query_vector = _get_text_embedding(selected_query)
+                    results = _vs_search(selected_query)
                 except Exception as e:
-                    st.error(f"CLIP encoding failed: {e}")
-                    return
-
-            with st.spinner("Searching VS index (HYBRID)..."):
-                try:
-                    results = _vs_search(selected_query, query_vector)
-                except Exception as e:
-                    st.error(f"VS search failed: {e}")
+                    st.error(f"Search failed: {e}")
                     return
 
             if results:
@@ -223,5 +193,5 @@ def render():
                 "databricks-gemini-2-5-flash (FMAPI)",
                 "video-search-endpoint + video_clips_index (ONLINE)",
             ],
-            dependencies=["databricks-vectorsearch==0.63", "transformers==4.41.2", "torch==2.3.1"],
+            dependencies=["databricks-vectorsearch==0.63 (pipeline only)", "No extra pip installs for the app"],
         )
