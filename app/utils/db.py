@@ -1,37 +1,55 @@
 import os
-import streamlit as st
 import pandas as pd
+import streamlit as st
+from databricks import sql
+from databricks.sdk.core import Config
 
 CATALOG = "serverless_stable_r4umw1_catalog"
-SCHEMA  = "unstructured_data"
-WAREHOUSE_ID = os.environ.get("WAREHOUSE_ID", "b04eb16e0536bd88")
+SCHEMA = "unstructured_data"
+
+# App service principal authentication (matches official Databricks Apps template)
+cfg = Config()
 
 
-def _hostname() -> str:
-    """Return bare hostname (strips https:// if present — Databricks Apps injects the full URL)."""
-    host = os.environ.get("DATABRICKS_HOST", "fevm-serverless-stable-r4umw1.cloud.databricks.com")
-    return host.removeprefix("https://").removeprefix("http://").rstrip("/")
+def _server_hostname() -> str:
+    """Return bare hostname for SQL connector."""
+    server_hostname = cfg.host
+    if server_hostname.startswith("https://"):
+        server_hostname = server_hostname.replace("https://", "")
+    elif server_hostname.startswith("http://"):
+        server_hostname = server_hostname.replace("http://", "")
+    return server_hostname
 
 
 @st.cache_resource
 def get_connection():
-    from databricks import sql as dbsql
-    token = os.environ.get("DATABRICKS_TOKEN")
-    return dbsql.connect(
-        server_hostname=_hostname(),
-        http_path=f"/sql/1.0/warehouses/{WAREHOUSE_ID}",
-        access_token=token,
+    warehouse_id = os.environ.get("DATABRICKS_WAREHOUSE_ID", "b04eb16e0536bd88")
+    return sql.connect(
+        server_hostname=_server_hostname(),
+        http_path=f"/sql/1.0/warehouses/{warehouse_id}",
+        credentials_provider=lambda: cfg.authenticate,
+        _use_arrow_native_complex_types=False,
     )
 
 
 @st.cache_data(ttl=300)
-def query(sql: str) -> pd.DataFrame:
-    conn = get_connection()
-    with conn.cursor() as cur:
-        cur.execute(sql)
-        rows = cur.fetchall()
-        cols = [d[0] for d in cur.description]
-    return pd.DataFrame(rows, columns=cols)
+def query(sql_str: str) -> pd.DataFrame:
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(sql_str)
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description]
+        return pd.DataFrame(rows, columns=cols)
+    except Exception:
+        # Connection may be stale (e.g. warehouse restarted) — clear cache and retry once
+        get_connection.clear()
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(sql_str)
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description]
+        return pd.DataFrame(rows, columns=cols)
 
 
 @st.cache_resource
@@ -42,13 +60,14 @@ def get_workspace_client():
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def download_volume_file(path: str) -> bytes:
-    """Download a file from a UC Volume path via Databricks Files API."""
+    """Download a file from a UC Volume path via the Files API."""
     import urllib.request
-    token = os.environ.get("DATABRICKS_TOKEN", "")
-    # Normalize path: strip dbfs: prefix, then leading slash
-    path = path.removeprefix("dbfs:").removeprefix("file:")
-    url = f"https://{_hostname()}/api/2.0/fs/files/{path.lstrip('/')}"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    # Normalize path
+    path = path.removeprefix("dbfs:").removeprefix("file:").lstrip("/")
+    # Get auth headers from SDK Config
+    headers = cfg.authenticate()
+    url = f"https://{_server_hostname()}/api/2.0/fs/files/{path}"
+    req = urllib.request.Request(url, headers=dict(headers))
     with urllib.request.urlopen(req) as resp:
         return resp.read()
 

@@ -1,8 +1,8 @@
-import base64
+import json
 import streamlit as st
 import plotly.express as px
 from utils.db import query, download_volume_file, CATALOG, SCHEMA
-from utils.formatting import recipe_header, code_tab_content, requirements_tab_content
+from utils.formatting import recipe_header, code_tab_content, requirements_tab_content, draw_bboxes_on_image, render_pdf_page
 
 VOLUME_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/w2_sample"
 
@@ -51,18 +51,32 @@ def render():
         col_pdf, col_data = st.columns([1, 1], gap="large")
 
         with col_pdf:
-            st.markdown("**Original PDF**")
-            with st.spinner("Loading PDF..."):
+            st.markdown("**Page with bounding boxes**")
+            show_bboxes = st.checkbox("Show bounding boxes", value=True, key="w2_bbox")
+            with st.spinner("Rendering page..."):
                 try:
                     pdf_bytes = download_volume_file(f"{VOLUME_PATH}/{selected_file}")
-                    b64 = base64.b64encode(pdf_bytes).decode()
-                    st.markdown(
-                        f'<iframe src="data:application/pdf;base64,{b64}" width="100%" height="600px" '
-                        f'style="border:1px solid #ddd;border-radius:4px"></iframe>',
-                        unsafe_allow_html=True,
-                    )
+                    page_img = render_pdf_page(pdf_bytes, page_num=0, dpi=200)
+
+                    if show_bboxes:
+                        bbox_df = query(f"""
+                            SELECT element_id, element_type, bbox::STRING AS bbox_str
+                            FROM {TABLE}
+                            WHERE file_path LIKE '%{selected_file}%'
+                              AND bbox IS NOT NULL
+                        """)
+                        bboxes = []
+                        for _, row in bbox_df.iterrows():
+                            bbox_list = json.loads(row["bbox_str"])
+                            for b in bbox_list:
+                                b["element_type"] = row["element_type"]
+                                b["label"] = f"{row['element_type']} ({row['element_id']})"
+                                bboxes.append(b)
+                        page_img = draw_bboxes_on_image(page_img, bboxes)
+
+                    st.image(page_img, use_column_width=True)
                 except Exception as e:
-                    st.error(f"Could not load PDF: {e}")
+                    st.error(f"Could not render page: {e}")
 
         with col_data:
             if view == "Parsed elements":

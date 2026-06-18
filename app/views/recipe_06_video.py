@@ -170,12 +170,17 @@ def render():
                 cols = st.columns(min(len(results), 3))
                 for i, r in enumerate(results):
                     with cols[i % 3]:
-                        try:
-                            img_bytes = download_volume_file(r.get("frame_path", ""))
-                            st.image(img_bytes, use_container_width=True)
-                        except Exception:
-                            st.caption("_(image unavailable)_")
-                        st.caption(f"Frame {r.get('frame_num', '?')} · {r.get('frame_description', '')[:80]}...")
+                        frame_path = r.get("frame_path") or ""
+                        if frame_path:
+                            try:
+                                img_bytes = download_volume_file(frame_path)
+                                st.image(img_bytes, use_column_width=True)
+                            except Exception as e:
+                                st.caption(f"_(image unavailable: {e})_")
+                        else:
+                            st.caption("_(no frame path)_")
+                        desc = r.get("frame_description") or ""
+                        st.caption(f"Frame {r.get('frame_num', '?')} · {desc[:80]}{'...' if len(desc) > 80 else ''}")
             else:
                 st.info("No matching frames found. Try a different query.")
 

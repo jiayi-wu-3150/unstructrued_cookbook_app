@@ -1,8 +1,9 @@
+import json
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 from utils.db import query, download_volume_file, CATALOG, SCHEMA
-from utils.formatting import recipe_header, code_tab_content, requirements_tab_content
+from utils.formatting import recipe_header, code_tab_content, requirements_tab_content, draw_bboxes_on_image
 
 IMAGES_VOLUME = f"/Volumes/{CATALOG}/{SCHEMA}/research_papers_images"
 
@@ -80,11 +81,31 @@ def render():
                     if not images_df.empty:
                         page_nums = images_df["page_id"].fillna(pd.Series(range(len(images_df)))).astype(int).tolist()
                         sel_page = st.selectbox("Page", page_nums, format_func=lambda p: f"Page {p+1}")
+                        show_bboxes = st.checkbox("Show bounding boxes", value=True, key="research_bbox")
                         img_row = images_df[images_df["page_id"] == sel_page]
                         if not img_row.empty:
                             img_uri = img_row.iloc[0]["image_uri"]
                             img_bytes = download_volume_file(img_uri)
-                            st.image(img_bytes, use_container_width=True)
+
+                            if show_bboxes:
+                                bbox_df = query(f"""
+                                    SELECT element_id, element_type, bbox::STRING AS bbox_str
+                                    FROM {TABLE}
+                                    WHERE file_path LIKE '%{selected_paper}%'
+                                      AND bbox IS NOT NULL
+                                """)
+                                bboxes = []
+                                for _, row in bbox_df.iterrows():
+                                    bbox_list = json.loads(row["bbox_str"])
+                                    for b in bbox_list:
+                                        if b.get("page_id") == sel_page:
+                                            b["element_type"] = row["element_type"]
+                                            b["label"] = row["element_type"]
+                                            bboxes.append(b)
+                                if bboxes:
+                                    img_bytes = draw_bboxes_on_image(img_bytes, bboxes)
+
+                            st.image(img_bytes, use_column_width=True)
                     else:
                         st.info("No page images available.")
                 except Exception as e:
@@ -92,7 +113,10 @@ def render():
 
         with col_results:
             if selected_paper:
-                if view == "Text elements":
+                if view == "Page images":
+                    st.caption("Browse page images in the left panel. Select a page to view the rendered output.")
+
+                elif view == "Text elements":
                     with st.spinner("Loading text..."):
                         df = query(f"""
                             SELECT element_id, element_type, content, confidence
@@ -125,7 +149,7 @@ def render():
                             with st.expander(f"Figure {row['element_id']}  ·  confidence {conf_label}"):
                                 st.markdown(row["description"] or "_No description_")
 
-                else:  # Type distribution
+                elif view == "Type distribution":
                     with st.spinner("Loading distribution..."):
                         dist_df = query(f"""
                             SELECT element_type,

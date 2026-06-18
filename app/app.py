@@ -18,14 +18,23 @@ RECIPES = {
     "🎬 Video (MP4 + VS Search)":   "views.recipe_06_video",
 }
 
+# Handle navigation from home page grid clicks
+recipe_keys = list(RECIPES.keys())
+default_idx = 0
+if "navigate_to" in st.session_state:
+    target = st.session_state.pop("navigate_to")
+    if target in recipe_keys:
+        default_idx = recipe_keys.index(target)
+
 with st.sidebar:
     st.markdown("## 🗂️ Unstructured Cookbook")
-    st.caption("Any file type → Databricks Vector Search")
+    st.caption("Any file type → Databricks")
     st.divider()
 
     selection = st.radio(
         "Choose a recipe:",
-        list(RECIPES.keys()),
+        recipe_keys,
+        index=default_idx,
         label_visibility="collapsed",
     )
 

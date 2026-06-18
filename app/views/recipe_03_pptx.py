@@ -1,6 +1,7 @@
+import json
 import streamlit as st
 from utils.db import query, download_volume_file, CATALOG, SCHEMA
-from utils.formatting import recipe_header, code_tab_content, requirements_tab_content
+from utils.formatting import recipe_header, code_tab_content, requirements_tab_content, draw_bboxes_on_image
 
 CHUNKS_TABLE = f"{CATALOG}.{SCHEMA}.pptx_chunks"
 PARSED_TABLE = f"{CATALOG}.{SCHEMA}.pptx_parsed"
@@ -56,7 +57,7 @@ def render():
 
         slide_ids = overview_df["slide_id"].tolist()
         slide_titles = overview_df["slide_title"].fillna("(no title)").tolist()
-        slide_labels = [f"Slide {sid+1}: {title[:40]}" for sid, title in zip(slide_ids, slide_titles)]
+        slide_labels = [f"Slide {sid+1}: {title.replace(chr(10), ' ').replace(chr(13), '')[:40]}" for sid, title in zip(slide_ids, slide_titles)]
 
         col_nav, col_view = st.columns([3, 1])
         with col_nav:
@@ -69,6 +70,7 @@ def render():
 
         with col_img:
             st.markdown("**Slide image**")
+            show_bboxes = st.checkbox("Show bounding boxes", value=True, key="pptx_bbox")
             with st.spinner("Loading slide image..."):
                 try:
                     img_df = query(f"""
@@ -81,7 +83,25 @@ def render():
                     """)
                     if not img_df.empty:
                         img_bytes = download_volume_file(img_df.iloc[0]["image_uri"])
-                        st.image(img_bytes, use_container_width=True)
+
+                        if show_bboxes:
+                            bbox_df = query(f"""
+                                SELECT element_id, element_type, bbox::STRING AS bbox_str
+                                FROM {PARSED_TABLE}
+                                WHERE slide_id = {selected_slide}
+                                  AND bbox IS NOT NULL
+                            """)
+                            bboxes = []
+                            for _, row in bbox_df.iterrows():
+                                bbox_list = json.loads(row["bbox_str"])
+                                for b in bbox_list:
+                                    b["element_type"] = row["element_type"]
+                                    b["label"] = row["element_type"]
+                                    bboxes.append(b)
+                            if bboxes:
+                                img_bytes = draw_bboxes_on_image(img_bytes, bboxes)
+
+                        st.image(img_bytes, use_column_width=True)
                     else:
                         st.info("No image for this slide.")
                 except Exception as e:
