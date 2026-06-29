@@ -6,6 +6,8 @@ Each recipe covers one file type end-to-end: raw file in a Unity Catalog Volume 
 
 **Live app:** https://unstructured-cookbook-7474653681240163.aws.databricksapps.com (Currently Internal)
 
+![Unstructured Cookbook walkthrough](docs/walkthrough.gif)
+
 ---
 
 ## Universal Output Schema
