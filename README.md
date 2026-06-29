@@ -4,7 +4,7 @@ A recipe book for ingesting any unstructured file type into Databricks — ready
 
 Each recipe covers one file type end-to-end: raw file in a Unity Catalog Volume → parsed chunks → Vector Search index.
 
-**Live app:** https://unstructured-cookbook-7474653681240163.aws.databricksapps.com
+**Live app:** https://unstructured-cookbook-7474653681240163.aws.databricksapps.com (Currently Internal)
 
 ---
 
