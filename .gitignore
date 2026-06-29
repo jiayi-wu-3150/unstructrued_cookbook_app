@@ -6,3 +6,6 @@
 Untitled
 __pycache__/
 *.pyc
+.DS_Store
+*.pyo
+.env
